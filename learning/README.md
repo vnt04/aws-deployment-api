@@ -1,0 +1,53 @@
+# Sổ tay học — AWS Deployment API
+
+Ghi lại **kiến thức** rút ra từ project, không phải hướng dẫn thao tác.
+Hướng dẫn làm từng bước nằm ở [`docs/deployment.md`](../docs/deployment.md) — hai tài liệu này bổ sung cho nhau:
+
+| Tài liệu | Trả lời câu hỏi |
+|----------|-----------------|
+| `docs/deployment.md` | **Làm thế nào?** — bấm nút nào, chạy lệnh gì |
+| `learning/` (đang đọc) | **Tại sao?** — vì sao thiết kế như vậy, sai thì hỏng ở đâu |
+
+## Tiến độ
+
+| Giai đoạn | Nội dung | Trạng thái | Ghi chú |
+|-----------|----------|-----------|---------|
+| 1 | NestJS + MySQL (Docker) ở local | ✅ Xong | [01-nestjs-va-nen-mong.md](01-nestjs-va-nen-mong.md) |
+| 2 | S3 + IAM — upload file lên AWS thật | ✅ Xong | [02-s3-va-iam.md](02-s3-va-iam.md) |
+| 3 | Deploy lên EC2 + PM2 + IAM Role | ⬜ Tiếp theo | |
+| 4 | Nginx reverse proxy | ⬜ | |
+| 5 | Domain + HTTPS (Certbot) | ⬜ | |
+| 6 | Chuyển sang RDS MySQL | ⬜ | |
+
+## Mục lục
+
+1. [Kiến trúc tổng quan](00-kien-truc-tong-quan.md) — bức tranh lớn và một luận điểm xuyên suốt
+2. [Giai đoạn 1 — NestJS và nền móng](01-nestjs-va-nen-mong.md) — kiến trúc tầng, config, envelope, migration
+3. [Giai đoạn 2 — S3 và IAM](02-s3-va-iam.md) — **trọng tâm hiện tại**: quyền trên AWS, luồng upload, bảo mật file
+4. [Nhật ký lỗi đã gặp](03-nhat-ky-loi.md) — lỗi thật, nguyên nhân thật, cách đọc lỗi
+5. [Cheatsheet](04-cheatsheet.md) — lệnh hay dùng, tra nhanh
+
+## Cách dùng sổ tay này
+
+Mỗi file có mục **"Tự kiểm tra"** ở cuối. Nếu trả lời được không cần mở lại tài liệu
+thì coi như đã nắm; chưa trả lời được thì phần tương ứng ở trên đáng đọc lại.
+
+---
+
+## Ba điều quan trọng nhất tính đến giờ
+
+Nếu chỉ nhớ được ba điều từ giai đoạn 1 + 2, hãy nhớ ba điều này:
+
+**1. Cấu hình là ranh giới giữa môi trường, không phải code.**
+Cùng một file `.js` chạy được ở laptop và trên EC2. Cái đổi là `.env`. Mọi thứ khiến
+code phải `if (isProduction)` đều là dấu hiệu thiết kế sai chỗ nào đó.
+
+**2. Trên AWS, quyền đến từ hai phía và phục vụ hai luồng khác nhau.**
+IAM policy gắn vào *identity* — trả lời "user/role này được làm gì?". Bucket policy gắn vào
+*resource* — trả lời "bucket này cho ai vào?". App upload file đi bằng đường thứ nhất;
+trình duyệt ẩn danh xem ảnh đi bằng đường thứ hai. Không phân biệt được hai đường này là
+nguyên nhân của hầu hết lỗi 403 khi mới học AWS.
+
+**3. Không tin dữ liệu client gửi lên.**
+Tên file, `Content-Type`, kích thước khai báo — tất cả đều do client tự đặt và sửa được.
+Chỉ tin thứ tự kiểm chứng được: magic bytes trong nội dung file, giới hạn do server áp.
