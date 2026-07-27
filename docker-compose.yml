@@ -1,0 +1,36 @@
+services:
+  mysql:
+    image: mysql:8
+    container_name: aws-deployment-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-aws_deployment}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-password}
+    ports:
+      # Đổi DB_PORT trong .env nếu máy đã có MySQL chiếm 3306.
+      - '${DB_PORT:-3306}:3306'
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost', '-p${DB_PASSWORD:-password}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build: .
+    container_name: aws-deployment-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Trong network của compose, MySQL nằm ở service name chứ không phải localhost.
+      DB_HOST: mysql
+    ports:
+      - '${PORT:-3000}:3000'
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
