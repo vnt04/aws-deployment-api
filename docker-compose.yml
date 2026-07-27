@@ -24,8 +24,10 @@ services:
     env_file:
       - .env
     environment:
-      # Trong network của compose, MySQL nằm ở service name chứ không phải localhost.
+      # DB_HOST/DB_PORT trong .env là địa chỉ nhìn từ host. Trong network của compose,
+      # MySQL nằm ở service name và luôn lắng nghe cổng 3306 gốc.
       DB_HOST: mysql
+      DB_PORT: 3306
     ports:
       - '${PORT:-3000}:3000'
     depends_on:
