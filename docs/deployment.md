@@ -63,50 +63,118 @@ curl http://localhost:3000/health/ready
 
 ## Giai đoạn 2 — S3 + IAM
 
-### 2.1 Tạo bucket
+Mục tiêu: máy local upload được file lên S3 thật.
 
-```bash
-aws s3api create-bucket \
-  --bucket my-aws-deployment-bucket \
-  --region ap-southeast-1 \
-  --create-bucket-configuration LocationConstraint=ap-southeast-1
+```
+Local Node.js ──▶ S3
 ```
 
-Avatar cần đọc được công khai, nên phải tắt 2 cờ chặn public policy:
+Giai đoạn này dùng **IAM User + access key** vì code chạy ngoài AWS. Từ giai đoạn 3
+(code chạy trên EC2) sẽ thay bằng IAM Role và xoá hẳn access key này.
 
-```bash
-aws s3api put-public-access-block \
-  --bucket my-aws-deployment-bucket \
-  --public-access-block-configuration \
-    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false"
+### 2.1 Tạo bucket (Console)
 
-aws s3api put-bucket-policy \
-  --bucket my-aws-deployment-bucket \
-  --policy file://deploy/aws/s3-bucket-policy-public-read.json
-```
+S3 → **Create bucket**
 
-> Nhớ thay `REPLACE_WITH_YOUR_BUCKET` trong file policy trước khi chạy.
-> Policy chỉ mở đọc cho prefix `users/*`, không mở toàn bucket.
+| Mục | Giá trị |
+|-----|---------|
+| Bucket type | General purpose |
+| Bucket name | duy nhất toàn cầu, ví dụ `aws-deployment-api-<tên>-01` |
+| Region | Asia Pacific (Singapore) `ap-southeast-1` |
+| Object Ownership | ACLs disabled (mặc định) |
+| Bucket Versioning | Disable |
+| Encryption | SSE-S3 (mặc định) |
 
-### 2.2 Test từ máy local bằng IAM User
+Phần **Block Public Access** — đây là chỗ dễ sai nhất. Bỏ tick "Block *all* public access",
+rồi chỉnh lại để **chỉ mở đường policy, vẫn chặn đường ACL**:
 
-Giai đoạn này dùng access key để chạy nhanh. Tạo IAM User (không cần console access),
-gắn policy inline từ `deploy/aws/s3-iam-policy.json`, rồi điền vào `.env`:
+| Tuỳ chọn | Trạng thái |
+|----------|-----------|
+| Block public access ... through **new ACLs** | ✅ giữ tick |
+| Block public access ... through **any ACLs** | ✅ giữ tick |
+| Block public access ... through **new public bucket policies** | ⬜ bỏ tick |
+| Block public and cross-account access ... through **any public bucket policies** | ⬜ bỏ tick |
+
+Console sẽ bắt tick xác nhận. Ý nghĩa: object chỉ public khi **bucket policy** cho phép,
+không ai public được bằng ACL trên từng file.
+
+### 2.2 Bucket policy — mở đọc cho `users/*`
+
+Bucket → tab **Permissions** → **Bucket policy** → Edit → dán nội dung
+`deploy/aws/s3-bucket-policy-public-read.json`, thay `REPLACE_WITH_YOUR_BUCKET` bằng tên bucket thật.
+
+Policy này chỉ mở `s3:GetObject` cho prefix `users/*` — không mở toàn bucket, không mở quyền ghi.
+
+### 2.3 Tạo IAM User cho máy local
+
+IAM → **Users** → **Create user**
+
+1. User name: `aws-deployment-api-local`
+2. **Không** tick "Provide user access to the AWS Management Console" — user này chỉ dùng cho code
+3. Permissions options → **Attach policies directly** → **Create policy** → tab **JSON**
+4. Dán nội dung `deploy/aws/s3-iam-policy.json`, thay `REPLACE_WITH_YOUR_BUCKET`
+5. Đặt tên policy: `aws-deployment-api-s3-avatars` → Create
+6. Quay lại tab tạo user, refresh danh sách policy, chọn policy vừa tạo → Create user
+
+Policy cho đúng 3 quyền `PutObject` / `GetObject` / `DeleteObject`, giới hạn trong `users/*`.
+Không có `s3:ListBucket`, không có quyền trên bucket khác.
+
+### 2.4 Tạo access key
+
+User vừa tạo → tab **Security credentials** → **Create access key**
+
+- Use case: **Application running outside AWS**
+- Secret access key chỉ hiện **một lần duy nhất** — copy ngay hoặc tải file `.csv`
+
+### 2.5 Điền vào `.env`
 
 ```env
 AWS_REGION=ap-southeast-1
-S3_BUCKET=my-aws-deployment-bucket
+S3_BUCKET=<tên bucket của bạn>
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
+
+# Để trống — chỉ dùng khi test bằng MinIO/LocalStack
+S3_ENDPOINT=
+# Để trống — app tự suy ra https://<bucket>.s3.<region>.amazonaws.com
+S3_PUBLIC_URL=
 ```
+
+> `.env` đã nằm trong `.gitignore`. Kiểm tra lại bằng `git check-ignore -v .env` trước khi commit.
 
 ### Kiểm tra
 
 ```bash
+docker compose up -d mysql
+npm run start:dev
+
+curl -X POST http://localhost:3000/users \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Nguyen Van A","email":"a@example.com"}'
+
 curl -X POST http://localhost:3000/users/1/avatar -F 'avatar=@./avatar.jpg'
 ```
 
-Response phải trả về `avatarUrl`, và mở URL đó trên trình duyệt phải xem được ảnh.
+Đạt khi cả hai điều sau đúng:
+
+1. Response trả về `avatarUrl` dạng `https://<bucket>.s3.ap-southeast-1.amazonaws.com/users/1/avatar.jpg`
+2. Mở URL đó trên trình duyệt (cửa sổ ẩn danh) xem được ảnh
+
+Nếu (1) đúng mà (2) trả 403 → upload đã chạy được, chỉ thiếu bucket policy ở bước 2.2.
+
+### Tương đương bằng CLI
+
+```bash
+aws s3api create-bucket --bucket <BUCKET> --region ap-southeast-1 \
+  --create-bucket-configuration LocationConstraint=ap-southeast-1
+
+aws s3api put-public-access-block --bucket <BUCKET> \
+  --public-access-block-configuration \
+    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false"
+
+aws s3api put-bucket-policy --bucket <BUCKET> \
+  --policy file://deploy/aws/s3-bucket-policy-public-read.json
+```
 
 ---
 
