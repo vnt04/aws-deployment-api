@@ -14,8 +14,8 @@ Hướng dẫn làm từng bước nằm ở [`docs/deployment.md`](../docs/depl
 |-----------|----------|-----------|---------|
 | 1 | NestJS + MySQL (Docker) ở local | ✅ Xong | [01-nestjs-va-nen-mong.md](01-nestjs-va-nen-mong.md) |
 | 2 | S3 + IAM — upload file lên AWS thật | ✅ Xong | [02-s3-va-iam.md](02-s3-va-iam.md) |
-| 3 | Deploy lên EC2 + PM2 + IAM Role | ⬜ Tiếp theo | |
-| 4 | Nginx reverse proxy | ⬜ | |
+| 3 | Deploy lên EC2 + PM2 + IAM Role | ✅ Xong | [03-ec2-va-iam-role.md](03-ec2-va-iam-role.md) |
+| 4 | Nginx reverse proxy | ⬜ Tiếp theo | |
 | 5 | Domain + HTTPS (Certbot) | ⬜ | |
 | 6 | Chuyển sang RDS MySQL | ⬜ | |
 
@@ -23,9 +23,12 @@ Hướng dẫn làm từng bước nằm ở [`docs/deployment.md`](../docs/depl
 
 1. [Kiến trúc tổng quan](00-kien-truc-tong-quan.md) — bức tranh lớn và một luận điểm xuyên suốt
 2. [Giai đoạn 1 — NestJS và nền móng](01-nestjs-va-nen-mong.md) — kiến trúc tầng, config, envelope, migration
-3. [Giai đoạn 2 — S3 và IAM](02-s3-va-iam.md) — **trọng tâm hiện tại**: quyền trên AWS, luồng upload, bảo mật file
-4. [Nhật ký lỗi đã gặp](03-nhat-ky-loi.md) — lỗi thật, nguyên nhân thật, cách đọc lỗi
-5. [Cheatsheet](04-cheatsheet.md) — lệnh hay dùng, tra nhanh
+3. [Giai đoạn 2 — S3 và IAM](02-s3-va-iam.md) — quyền trên AWS, luồng upload, bảo mật file
+4. [Giai đoạn 3 — EC2 và IAM Role](03-ec2-va-iam-role.md) — **trọng tâm hiện tại**: danh tính không cần mật khẩu, RAM, mạng, vận hành
+5. [Nhật ký lỗi đã gặp](90-nhat-ky-loi.md) — lỗi thật, nguyên nhân thật, cách đọc lỗi
+6. [Cheatsheet](91-cheatsheet.md) — lệnh hay dùng, tra nhanh
+
+> Số 00–06 dành cho các giai đoạn, 90+ dành cho tài liệu tra cứu dùng chung.
 
 ## Cách dùng sổ tay này
 
@@ -34,9 +37,9 @@ thì coi như đã nắm; chưa trả lời được thì phần tương ứng �
 
 ---
 
-## Ba điều quan trọng nhất tính đến giờ
+## Bốn điều quan trọng nhất tính đến giờ
 
-Nếu chỉ nhớ được ba điều từ giai đoạn 1 + 2, hãy nhớ ba điều này:
+Nếu chỉ nhớ được bốn điều từ giai đoạn 1 → 3, hãy nhớ bốn điều này:
 
 **1. Cấu hình là ranh giới giữa môi trường, không phải code.**
 Cùng một file `.js` chạy được ở laptop và trên EC2. Cái đổi là `.env`. Mọi thứ khiến
@@ -51,3 +54,9 @@ nguyên nhân của hầu hết lỗi 403 khi mới học AWS.
 **3. Không tin dữ liệu client gửi lên.**
 Tên file, `Content-Type`, kích thước khai báo — tất cả đều do client tự đặt và sửa được.
 Chỉ tin thứ tự kiểm chứng được: magic bytes trong nội dung file, giới hạn do server áp.
+
+**4. Secret không xoay vòng là secret sẽ rò rỉ — chỉ là vấn đề thời gian.**
+Cách chống bền vững không phải giữ kín hơn, mà là rút ngắn thời gian sống của nó. IAM Role
+làm đúng điều đó: EC2 mượn danh tính qua STS, nhận credential hết hạn sau vài giờ và tự làm
+mới. Có cơ chế danh tính do nền tảng cấp thì đừng dùng secret tĩnh — GitHub Actions có OIDC,
+Kubernetes có ServiceAccount, cùng một ý tưởng.

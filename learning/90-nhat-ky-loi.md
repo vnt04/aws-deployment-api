@@ -177,6 +177,83 @@ còn thiếu gì.
 
 ---
 
+## Lỗi 4 — Lệnh kiểm tra IMDS chạy lần đầu ra kết quả, chạy lần hai không in gì
+
+### Bối cảnh
+
+Kiểm tra IAM Role trên EC2 ở giai đoạn 3:
+
+```
+$ TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token \
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')
+$ curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+    http://169.254.169.254/latest/meta-data/iam/security-credentials/
+aws-deployment-api-ec2ubuntu@ip-172-31-8-49:~$        ← lần 1
+
+$ curl -s -H "X-aws-ec2-metadata-token: $TOKEN" ...
+ubuntu@ip-172-31-8-49:~$                              ← lần 2, rỗng
+```
+
+### Chẩn đoán
+
+Hai hiểu nhầm chồng lên nhau, và cả hai đều do **`curl -s` giấu thông tin**.
+
+**Hiểu nhầm 1 — tưởng lần 1 cũng không in gì.** IMDS trả về chuỗi **không có ký tự xuống
+dòng ở cuối**, nên kết quả dính liền vào prompt:
+
+```
+aws-deployment-api-ec2ubuntu@ip-172-31-8-49:~$
+└────────┬───────────┘└──────────┬──────────┘
+     kết quả                  prompt
+```
+
+Lần 1 đã thành công. Role đã gắn đúng.
+
+**Hiểu nhầm 2 — tưởng lần 2 lỗi mạng.** Token xin với `ttl-seconds: 60`, tức sống 60 giây.
+Gõ lệnh thứ hai sau đó là token đã hết hạn, IMDS trả `401 Unauthorized` với body rỗng.
+`curl -s` không hiện status code, nên nhìn y hệt như không có phản hồi.
+
+Kiểm chứng:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/iam/security-credentials/
+# 401 → token hết hạn   |   200 → còn dùng được
+```
+
+### Nguyên nhân
+
+TTL 60 giây quá ngắn cho thao tác gõ tay. Không phải lỗi cấu hình Role, không phải lỗi mạng.
+
+### Cách xử lý
+
+Xin token với TTL dài (tối đa 21600 giây = 6 giờ), và lấy luôn credential trong cùng một lần:
+
+```bash
+TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token \
+  -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600')
+
+ROLE=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/iam/security-credentials/)
+echo "Role: $ROLE"
+
+curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  "http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE" | python3 -m json.tool
+```
+
+### Rút ra
+
+**`curl -s` là con dao hai lưỡi.** Nó tắt thanh tiến trình, nhưng cũng làm mọi lỗi HTTP trông
+giống hệt "không có phản hồi". Khi kết quả bất ngờ, phản xạ đầu tiên nên là bỏ `-s` hoặc thêm
+`-w '%{http_code}\n'` — biết được server trả 401 hay không trả gì là hai hướng điều tra khác hẳn nhau.
+
+Kèm theo: **output không có newline là chuyện bình thường** với API kiểu này. Thấy chữ dính
+vào prompt thì đó là dữ liệu, không phải rác. Thêm `; echo` vào cuối lệnh cho dễ đọc.
+
+Giải thích vì sao IMDSv2 phải phiền phức như vậy: [03-ec2-va-iam-role.md § IMDS](03-ec2-va-iam-role.md#imds).
+
+---
+
 ## Mẫu ghi lỗi mới
 
 Copy khối này khi gặp lỗi ở các giai đoạn sau:

@@ -161,21 +161,96 @@ Xem bằng: `xxd -l 16 avatar.jpg`
 
 ---
 
-## Giai đoạn 3 sắp tới — chuẩn bị gì
+## Trên EC2 (giai đoạn 3)
 
 ```bash
 ssh -i your-key.pem ubuntu@<ELASTIC_IP>
-
-pm2 start ecosystem.config.js
-pm2 status / pm2 logs / pm2 reload aws-deployment-api --update-env
-pm2 save && pm2 startup
-
-./deploy/deploy.sh                # các lần deploy sau
 ```
 
-Ba điểm dễ sai đã biết trước:
+### PM2
 
-1. **Không mở port 3000** ra Internet trong Security Group — chỉ 22 / 80 / 443
-2. Trên EC2 phải **để trống** `AWS_ACCESS_KEY_ID` và `AWS_SECRET_ACCESS_KEY` để SDK dùng IAM Role
-3. Xong giai đoạn 3 thì **xoá access key của IAM User `aws-deployment-api-local`** —
-   nó không còn cần thiết
+```bash
+pm2 status                                    # tiến trình nào đang chạy
+pm2 logs aws-deployment-api --lines 100       # log gần nhất
+pm2 logs --err                                # chỉ stderr
+pm2 reload aws-deployment-api --update-env    # nạp lại .env, không downtime
+pm2 restart aws-deployment-api                # có downtime, dùng khi reload không ăn
+pm2 monit                                     # CPU/RAM theo thời gian thực
+pm2 save                                      # ghi lại danh sách sau khi đổi
+```
+
+> `reload` chỉ không downtime khi `exec_mode: 'cluster'`. Xem
+> [03-ec2-va-iam-role.md § PM2](03-ec2-va-iam-role.md#pm2-instances).
+
+### Kiểm tra IAM Role
+
+```bash
+TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token \
+  -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600')
+
+ROLE=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/iam/security-credentials/)
+echo "Role: $ROLE"
+
+curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  "http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE" | python3 -m json.tool
+```
+
+`AccessKeyId` bắt đầu bằng `ASIA` = credential tạm thời từ Role. `AKIA` = key vĩnh viễn của
+IAM User. Kết quả rỗng thì kiểm tra HTTP status trước khi kết luận:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/iam/security-credentials/
+# 401 = token hết hạn   |   200 = ổn
+```
+
+### Tài nguyên máy
+
+```bash
+free -h                           # RAM và swap
+df -h                             # dung lượng đĩa
+htop                              # tiến trình (apt install htop)
+dmesg | grep -i 'killed process'  # kiểm tra OOM killer có ra tay không
+sudo swapon --show                # swap đang bật
+```
+
+### MySQL trong Docker
+
+```bash
+docker compose ps
+docker compose logs -f mysql
+docker compose exec mysql mysql -uroot -p aws_deployment    # vào shell SQL
+docker compose restart mysql
+```
+
+### Deploy
+
+```bash
+./deploy/deploy.sh                # pull → npm ci → build → migration → reload → health check
+BRANCH=feature/x ./deploy/deploy.sh
+```
+
+Ba điểm dễ sai:
+
+1. **Đừng `export NODE_ENV=production`** trong shell — npm sẽ bỏ `devDependencies`, mất
+   `ts-node` và `migration:run` chết. App vẫn nhận biến này qua `.env` và `ecosystem.config.js`.
+2. **Đừng sửa code trực tiếp trên server** — `deploy.sh` chạy `git reset --hard`, thay đổi
+   local sẽ bị xoá không cảnh báo.
+3. **`pm2 save` sau mỗi lần đổi danh sách tiến trình**, nếu không reboot sẽ khôi phục về trạng
+   thái cũ.
+
+---
+
+## Giai đoạn 4 sắp tới — chuẩn bị gì
+
+```bash
+sudo apt-get install -y nginx
+sudo nginx -t                     # kiểm tra cú pháp TRƯỚC khi reload
+sudo systemctl reload nginx
+sudo tail -f /var/log/nginx/api.error.log
+```
+
+Điểm đã biết trước sẽ vấp: `client_max_body_size` mặc định của Nginx là **1MB**, nhỏ hơn giới
+hạn 5MB của app. `deploy/nginx/api.conf:12` đã đặt sẵn `6M` — nhưng nếu quên thì file 3MB bị
+chặn bằng `413` **trước khi tới Node**, và log của Node sẽ hoàn toàn trống.
