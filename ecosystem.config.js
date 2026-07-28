@@ -5,7 +5,8 @@ module.exports = {
       script: 'dist/main.js',
       cwd: '/home/ubuntu/aws-deployment-api',
       exec_mode: 'cluster',
-      instances: 'max',
+      // t3.micro chỉ có 1GB RAM — 'max' fork 2 worker, chạy cùng MySQL là OOM.
+      instances: 1,
       env: {
         NODE_ENV: 'production',
       },

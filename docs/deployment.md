@@ -80,7 +80,7 @@ S3 → **Create bucket**
 |-----|---------|
 | Bucket type | General purpose |
 | Bucket name | duy nhất toàn cầu, ví dụ `aws-deployment-api-<tên>-01` |
-| Region | Asia Pacific (Singapore) `ap-southeast-1` |
+| Region | Asia Pacific (Sydney) `ap-southeast-2` — mọi tài nguyên sau này phải cùng region |
 | Object Ownership | ACLs disabled (mặc định) |
 | Bucket Versioning | Disable |
 | Encryption | SSE-S3 (mặc định) |
@@ -129,7 +129,7 @@ User vừa tạo → tab **Security credentials** → **Create access key**
 ### 2.5 Điền vào `.env`
 
 ```env
-AWS_REGION=ap-southeast-1
+AWS_REGION=ap-southeast-2
 S3_BUCKET=<tên bucket của bạn>
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
@@ -157,7 +157,7 @@ curl -X POST http://localhost:3000/users/1/avatar -F 'avatar=@./avatar.jpg'
 
 Đạt khi cả hai điều sau đúng:
 
-1. Response trả về `avatarUrl` dạng `https://<bucket>.s3.ap-southeast-1.amazonaws.com/users/1/avatar.jpg`
+1. Response trả về `avatarUrl` dạng `https://<bucket>.s3.ap-southeast-2.amazonaws.com/users/1/avatar.jpg`
 2. Mở URL đó trên trình duyệt (cửa sổ ẩn danh) xem được ảnh
 
 Nếu (1) đúng mà (2) trả 403 → upload đã chạy được, chỉ thiếu bucket policy ở bước 2.2.
@@ -165,8 +165,8 @@ Nếu (1) đúng mà (2) trả 403 → upload đã chạy được, chỉ thiế
 ### Tương đương bằng CLI
 
 ```bash
-aws s3api create-bucket --bucket <BUCKET> --region ap-southeast-1 \
-  --create-bucket-configuration LocationConstraint=ap-southeast-1
+aws s3api create-bucket --bucket <BUCKET> --region ap-southeast-2 \
+  --create-bucket-configuration LocationConstraint=ap-southeast-2
 
 aws s3api put-public-access-block --bucket <BUCKET> \
   --public-access-block-configuration \
@@ -180,64 +180,234 @@ aws s3api put-bucket-policy --bucket <BUCKET> \
 
 ## Giai đoạn 3 — Deploy lên EC2
 
-### 3.1 Tạo EC2
+Mục tiêu: app chạy trên EC2 và upload được lên S3 **mà không có access key nào trên đĩa**.
 
-- AMI: Ubuntu 22.04 / 24.04 LTS
-- Type: t3.micro (đủ cho môi trường học)
-- Security Group inbound:
+```
+Internet ──▶ EC2 (Elastic IP)
+              ├── NestJS :3000  (PM2)
+              └── MySQL  :3306  (Docker, chỉ bind loopback)
+                      │
+                      └── IAM Role ──▶ S3
+```
+
+RDS tận giai đoạn 6 mới có, nhưng `DB_RUN_MIGRATIONS=true` khiến TypeORM kết nối DB ngay
+lúc bootstrap — không có MySQL thì app không khởi động nổi. Nên giai đoạn 3 chạy MySQL
+bằng Docker ngay trên EC2, giai đoạn 6 chỉ việc đổi `.env` trỏ sang RDS.
+
+### 3.1 IAM Role — làm trước khi tạo EC2
+
+IAM → **Roles** → **Create role**
+
+1. Trusted entity type: **AWS service** → Use case: **EC2**
+2. Permissions: chọn lại đúng policy `aws-deployment-api-s3-avatars` đã tạo ở giai đoạn 2 —
+   **không cần sửa gì**, cùng 3 action, cùng prefix `users/*`
+3. Role name: `aws-deployment-api-ec2`
+
+Console tự sinh **trust policy** — nội dung đúng bằng `deploy/aws/ec2-trust-policy.json`.
+Đây là loại policy thứ ba, khác cả hai loại ở giai đoạn 2: nó gắn vào chính Role và trả lời
+"*ai* được phép mượn danh tính này?". `Principal` ở đây là một **service** chứ không phải người:
+
+```json
+"Principal": { "Service": "ec2.amazonaws.com" },
+"Action": "sts:AssumeRole"
+```
+
+Thiếu trust policy thì Role tồn tại nhưng EC2 không mượn được — permission policy đúng cũng vô nghĩa.
+
+### 3.2 Tạo EC2
+
+EC2 → Launch instance. **Kiểm tra region ở góc trên phải là `ap-southeast-2`** — phải cùng
+region với bucket, khác region là trả thêm phí data transfer cho mỗi lần upload.
+
+| Mục | Giá trị |
+|-----|---------|
+| AMI | Ubuntu Server 24.04 LTS |
+| Instance type | t3.micro |
+| Key pair | tạo mới, tải file `.pem` về, `chmod 400` |
+| Advanced details → **IAM instance profile** | `aws-deployment-api-ec2` ← đừng bỏ sót |
+
+Security Group inbound:
 
 | Port | Source | Mục đích |
 |------|--------|----------|
 | 22   | IP của bạn | SSH |
-| 80   | 0.0.0.0/0 | HTTP |
-| 443  | 0.0.0.0/0 | HTTPS |
+| 80   | 0.0.0.0/0 | HTTP (giai đoạn 4) |
+| 443  | 0.0.0.0/0 | HTTPS (giai đoạn 5) |
 
-> **Không** mở port 3000 ra ngoài. Node chỉ nhận traffic qua Nginx.
+> **Không** mở 3000 và 3306. Node chỉ nhận traffic qua Nginx, MySQL chỉ nghe trên loopback.
 
-Gán **Elastic IP** cho instance để IP không đổi sau mỗi lần restart.
-
-### 3.2 IAM Role thay cho access key
-
-Đây là điểm quan trọng nhất của giai đoạn này:
-
-1. Tạo IAM Role, trusted entity = **EC2**
-2. Gắn policy từ `deploy/aws/s3-iam-policy.json`
-3. Attach role vào EC2 instance
-4. Trên EC2, **để trống** `AWS_ACCESS_KEY_ID` và `AWS_SECRET_ACCESS_KEY` trong `.env`
-
-AWS SDK sẽ tự lấy credential tạm thời từ instance metadata. Không còn secret nào nằm trên đĩa.
-
-### 3.3 Cài môi trường
+Xong thì gán **Elastic IP** để IP không đổi sau mỗi lần stop/start.
 
 ```bash
 ssh -i your-key.pem ubuntu@<ELASTIC_IP>
+```
 
+### 3.3 Swap 2GB — làm trước khi build
+
+t3.micro chỉ có 1GB RAM. `npm run build` (tsc) đỉnh điểm ~400MB, cộng MySQL ~400MB là chạm trần.
+Không có swap thì kernel OOM-kill giữa chừng, và thông báo lỗi thường rất khó hiểu.
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # giữ sau reboot
+free -h
+```
+
+### 3.4 Cài Node, PM2, Docker
+
+```bash
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs git
+sudo apt-get install -y nodejs git docker.io docker-compose-v2
 sudo npm install -g pm2
 
-git clone https://github.com/<user>/aws-deployment-api.git
+sudo usermod -aG docker ubuntu
+newgrp docker            # hoặc thoát SSH rồi vào lại
+```
+
+> Đừng `export NODE_ENV=production` trong shell. npm coi đó là `--omit=dev`, bỏ luôn
+> `ts-node` — mà `npm run migration:run` cần nó (`package.json:22`). App vẫn nhận
+> `NODE_ENV=production` qua `.env` và `ecosystem.config.js:11`, không cần export.
+
+### 3.5 Deploy key và clone repo
+
+Repo private nên cần deploy key. Tạo key **trên EC2**:
+
+```bash
+ssh-keygen -t ed25519 -C "ec2-aws-deployment-api" -f ~/.ssh/id_ed25519 -N ""
+cat ~/.ssh/id_ed25519.pub
+```
+
+GitHub → repo → **Settings** → **Deploy keys** → **Add deploy key** → dán public key.
+**Không** tick "Allow write access" — EC2 chỉ cần đọc.
+
+```bash
+ssh -T git@github.com    # xác nhận fingerprint, hiện "successfully authenticated"
+
+git clone git@github.com:vnt04/aws-deployment-api.git
 cd aws-deployment-api
-cp .env.example .env   # sửa lại giá trị thật
+```
+
+> Đường dẫn phải đúng `/home/ubuntu/aws-deployment-api` — `ecosystem.config.js:6` và
+> `deploy/deploy.sh:5` đều hardcode nó.
+
+### 3.6 `.env` trên EC2
+
+```bash
+cp .env.example .env && nano .env
+```
+
+```env
+NODE_ENV=production
+PORT=3000
+CORS_ORIGINS=*                    # siết về domain thật ở giai đoạn 5
+
+DB_HOST=127.0.0.1
+DB_PORT=3306                      # local là 3307, trên EC2 là 3306
+DB_USERNAME=root
+DB_PASSWORD=<mật khẩu mạnh>
+DB_NAME=aws_deployment
+DB_SSL=false                      # bật ở giai đoạn 6 khi sang RDS
+DB_SYNCHRONIZE=false
+DB_RUN_MIGRATIONS=true
+
+AWS_REGION=ap-southeast-2
+S3_BUCKET=<tên bucket của bạn>
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+S3_ENDPOINT=
+S3_PUBLIC_URL=
+```
+
+Hai dòng key **để trống là có chủ đích**, không phải quên điền. `storage.module.ts:22-30`
+chỉ truyền `credentials` khi cả hai có giá trị; để trống là ra lệnh cho SDK đi tiếp xuống
+instance metadata.
+
+### 3.7 MySQL bằng Docker Compose
+
+```bash
+docker compose up -d mysql        # chỉ service mysql, KHÔNG up service api
+docker compose ps
+```
+
+App chạy trực tiếp bằng PM2 trên host nên không dùng service `api` trong compose.
+Compose đọc `.env` để lấy `DB_NAME` / `DB_PASSWORD` / `DB_PORT`, nên phải sửa `.env` **trước** khi up.
+
+> `MYSQL_ROOT_PASSWORD` chỉ có tác dụng lần đầu tạo volume. Đổi `DB_PASSWORD` sau đó mà
+> muốn có hiệu lực thì phải `docker compose down -v` — và mất sạch dữ liệu.
+
+### 3.8 Build và chạy
+
+```bash
 npm ci
 npm run build
 mkdir -p logs
 pm2 start ecosystem.config.js
 pm2 save
-pm2 startup   # chạy tiếp lệnh mà PM2 in ra để tự khởi động sau reboot
+pm2 startup      # chạy tiếp lệnh mà PM2 in ra để tự khởi động sau reboot
 ```
 
 ### Kiểm tra
 
 ```bash
-curl http://127.0.0.1:3000/health      # trên EC2
+curl http://127.0.0.1:3000/health          # process sống
+curl http://127.0.0.1:3000/health/ready    # chạy SELECT 1 xuống MySQL container
+
+curl -X POST http://127.0.0.1:3000/users \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"EC2 Test","email":"ec2@example.com"}'
+
+curl -X POST http://127.0.0.1:3000/users/1/avatar -F 'avatar=@./avatar.jpg'
 ```
 
-Các lần deploy sau chỉ cần:
+Đạt khi upload trả về `avatarUrl` **trong lúc `.env` không chứa access key nào**. Đó là bằng
+chứng credential đến từ IAM Role. Xem tận mắt:
+
+```bash
+TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token \
+  -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600')
+
+ROLE=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/iam/security-credentials/)
+echo "Role: $ROLE"
+
+curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  "http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE" | python3 -m json.tool
+```
+
+Credential trả về có `AccessKeyId` bắt đầu bằng `ASIA` (tạm thời, từ STS) chứ không phải
+`AKIA` (vĩnh viễn, của IAM User), kèm `Token` và `Expiration` — SDK tự lấy bản mới trước khi hết hạn.
+
+> IMDS trả về **không có ký tự xuống dòng** nên kết quả dính liền vào prompt — dễ tưởng là rỗng.
+> Token cũng hết hạn đúng theo TTL đã xin; hết hạn thì IMDS trả `401` với body rỗng, và `curl -s`
+> không hiện gì cả. Kiểm tra bằng `curl -s -o /dev/null -w '%{http_code}\n' ...`.
+
+| Triệu chứng | Nguyên nhân |
+|---|---|
+| Metadata trả rỗng | quên gắn IAM instance profile lúc launch — gắn sau rồi `pm2 restart` |
+| Upload 500, log `AccessDenied` | Role thiếu policy, hoặc sai `S3_BUCKET` / `AWS_REGION` |
+| Upload 500, log `CredentialsProviderError` | `.env` còn sót key sai — xoá hẳn giá trị |
+| `/health/ready` trả 503 | container mysql chưa up, hoặc `DB_PORT` trong `.env` không phải 3306 |
+
+### 3.9 Xoá access key của giai đoạn 2
+
+Chỉ làm **sau khi** upload từ EC2 đã chạy: IAM → user `aws-deployment-api-local` →
+Security credentials → **Deactivate** → **Delete**.
+
+Từ đây máy local không upload lên S3 thật được nữa — đúng như thiết kế. Muốn dev local tiếp
+thì chạy MinIO và set `S3_ENDPOINT=http://127.0.0.1:9000`; `storage.module.ts:32` đã có sẵn
+nhánh `forcePathStyle` cho việc đó.
+
+### Các lần deploy sau
 
 ```bash
 ./deploy/deploy.sh
 ```
+
+Script `git reset --hard origin/main` nhưng `.env`, `logs/`, `dist/` đều nằm trong
+`.gitignore` nên không bị xoá.
 
 ---
 
@@ -336,7 +506,7 @@ FLUSH PRIVILEGES;
 ### 6.3 Đổi `.env` trên EC2
 
 ```env
-DB_HOST=aws-deployment.abcdefg.ap-southeast-1.rds.amazonaws.com
+DB_HOST=aws-deployment.abcdefg.ap-southeast-2.rds.amazonaws.com
 DB_PORT=3306
 DB_USERNAME=app
 DB_PASSWORD=<mật khẩu mạnh>
