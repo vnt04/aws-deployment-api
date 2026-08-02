@@ -465,29 +465,167 @@ Chờ DNS propagate rồi kiểm tra:
 
 ```bash
 dig +short api.yourdomain.com
+# Phải trả về Elastic IP
 ```
 
-### 5.2 Certificate
+Test HTTP trước khi có SSL:
 
 ```bash
+curl http://api.yourdomain.com/health
+# Phải trả về: {"success":true,"data":{"status":"ok"}}
+```
+
+> **Lưu ý Cloudflare**: Nếu dùng Cloudflare, tắt proxy (gray cloud) lúc đầu để test trực tiếp IP EC2. Bật proxy sau khi HTTPS chạy ổn.
+
+### 5.2 Certificate (Certbot)
+
+```bash
+sudo apt-get update
 sudo apt-get install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d api.yourdomain.com
 ```
 
-Certbot tự thêm block `listen 443 ssl` và chuyển port 80 thành redirect. Cron gia hạn
-cũng được cài sẵn — kiểm tra bằng `sudo certbot renew --dry-run`.
+Certbot sẽ hỏi 4 câu:
+1. **Email** — nhập email thật (nhận thông báo hết hạn)
+2. **Agree Terms** — `Y`
+3. **Share email with EFF** — `N` (tuỳ ý)
+4. **Redirect HTTP to HTTPS** — **Chọn 2 (Redirect)** — quan trọng nhất
 
-Siết CORS lại sau khi có domain:
+Certbot tự động:
+- Xác thực domain qua HTTP-01 challenge (cần port 80 mở)
+- Lấy certificate Let's Encrypt (miễn phí, 90 ngày)
+- Sửa config Nginx: thêm block `listen 443 ssl` + `ssl_certificate`/`ssl_certificate_key`
+- Chuyển block port 80 thành redirect 301 sang HTTPS
+- Cài cron job auto-renew (`/etc/cron.d/certbot` hoặc systemd timer)
+
+### 5.3 Kiểm tra HTTPS
+
+```bash
+# Test HTTPS trực tiếp
+curl -i https://api.yourdomain.com/health
+# Phải trả về 200 OK + JSON
+
+# Test redirect HTTP → HTTPS
+curl -I http://api.yourdomain.com/health
+# Phải trả về: HTTP/1.1 301 Moved Permanently
+# Location: https://api.yourdomain.com/health
+
+# Mở trình duyệt ẩn danh: https://api.yourdomain.com/health
+# Phải thấy JSON response, khóa xanh 🔒
+```
+
+### 5.4 Auto-Renew
+
+```bash
+# Test dry-run
+sudo certbot renew --dry-run
+
+# Xem cron job
+cat /etc/cron.d/certbot
+# Hoặc systemd timer
+systemctl list-timers | grep certbot
+```
+
+### 5.5 CORS — Siết Về Domain Thật
+
+Sửa `.env` trên EC2:
+
+```bash
+cd /home/ubuntu/aws-deployment-api
+nano .env
+```
 
 ```env
+# Trước
+CORS_ORIGINS=*
+
+# Sau — thay yourdomain.com bằng domain thật
 CORS_ORIGINS=https://yourdomain.com
+# Hoặc nhiều origin:
+# CORS_ORIGINS=https://app.yourdomain.com,https://admin.yourdomain.com
 ```
+
+Reload PM2 với env mới:
+
+```bash
+pm2 reload aws-deployment-api --update-env
+```
+
+### 5.6 Kiểm Tra CORS
+
+```bash
+# Test preflight (OPTIONS)
+curl -i -X OPTIONS https://api.yourdomain.com/users \
+  -H "Origin: https://yourdomain.com" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: Content-Type"
+
+# Phải trả về headers:
+# Access-Control-Allow-Origin: https://yourdomain.com
+# Access-Control-Allow-Methods: GET,POST,PATCH,DELETE,OPTIONS
+# Access-Control-Allow-Headers: Content-Type,Authorization
+# Access-Control-Allow-Credentials: true
+```
+
+Test từ browser console (F12 → Console):
+```javascript
+fetch('https://api.yourdomain.com/health', { credentials: 'include' })
+  .then(r => r.json())
+  .then(console.log)
+# Phải thành công, không báo CORS error
+```
+
+### 5.7 (Tùy chọn) Hardening SSL
+
+Thêm vào block `server { listen 443 ssl; }` trong `/etc/nginx/sites-enabled/api.conf`:
+
+```nginx
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+ssl_prefer_server_ciphers off;
+
+# HSTS
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+# OCSP Stapling
+ssl_stapling on;
+ssl_stapling_verify on;
+resolver 8.8.8.8 8.8.4.4 valid=300s;
+resolver_timeout 5s;
+```
+
+Sau khi thêm: `sudo nginx -t && sudo systemctl reload nginx`
+
+Test SSL grade: https://www.ssllabs.com/ssltest/analyze.html?d=api.yourdomain.com (mục tiêu A+)
 
 ### Kiểm tra
 
 ```bash
 curl https://api.yourdomain.com/health
+curl https://api.yourdomain.com/health/ready
+curl -I http://api.yourdomain.com/health    # phải 301 redirect
+curl -X POST https://api.yourdomain.com/users/1/avatar -F 'avatar=@./avatar.jpg'
 ```
+
+Đạt khi:
+1. HTTPS health/ready trả `200`
+2. HTTP redirect `301` sang HTTPS
+3. Upload avatar trả `avatarUrl` dạng HTTPS
+4. CORS preflight trả headers đúng domain
+5. `certbot renew --dry-run` thành công
+
+### Troubleshooting
+
+| Vấn đề | Nguyên nhân | Khắc phục |
+|--------|-------------|-----------|
+| Certbot "Connection refused" | Nginx chưa chạy hoặc SG chặn 80/443 | `systemctl status nginx`, check SG |
+| Certbot "DNS problem" | DNS chưa propagate hoặc sai A record | `dig api.yourdomain.com`, chờ DNS |
+| HTTPS 502 Bad Gateway | NestJS chưa chạy | `pm2 status`, `pm2 logs` |
+| Avatar URL trả `http://` | `S3_PUBLIC_URL` chưa set | Set `S3_PUBLIC_URL=https://<bucket>.s3.ap-southeast-2.amazonaws.com` |
+| CORS error | `CORS_ORIGINS` sai hoặc thiếu reload | Kiểm tra `.env`, `pm2 reload --update-env` |
+| Certificate gần hết hạn | Cron renew fail | `certbot renew --dry-run`, check log |
+
+> Chi tiết kiến thức: [`learning/05-domain-https.md`](../learning/05-domain-https.md)
 
 ---
 

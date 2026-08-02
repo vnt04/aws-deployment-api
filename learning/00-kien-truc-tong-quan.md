@@ -26,18 +26,23 @@
           (Giai đoạn 6)        (Giai đoạn 2 ✅)
 ```
 
-Hiện tại (sau giai đoạn 4), phần đang chạy là:
+Hiện tại (sau giai đoạn 5), phần đang chạy là:
 
 ```
-Internet ──▶ EC2 (Elastic IP)
-              ├── Nginx  :80         ← Giai đoạn 4 ✅
+Internet ──▶ api.yourdomain.com (DNS)
+              │
+              ▼
+         Elastic IP
+              │
+              ▼
+         EC2: Nginx :80/:443 (SSL termination)  ← Giai đoạn 5 ✅
               │       │
-              │       ▼
-              │   NestJS :3000       ← Giai đoạn 3 ✅
-              └── MySQL :3306 (Docker)
+              │       ▼ (proxy_pass)
+              │   NestJS :3000 (PM2)            ← Giai đoạn 3 ✅
+              └── MySQL :3306 (Docker)          ← Giai đoạn 6 sẽ chuyển sang RDS
 ```
 
-Tức là **code đã chạy trên EC2, traffic qua Nginx reverse proxy, upload lên S3 thật**. Giai đoạn 5 thêm DNS + HTTPS, giai đoạn 6 chuyển MySQL sang RDS.
+Tức là **code đã chạy trên EC2, traffic qua Nginx reverse proxy + HTTPS, upload lên S3 thật**. Giai đoạn 6 chỉ việc chuyển MySQL sang RDS.
 
 ## Luận điểm xuyên suốt: code không đổi, chỉ đổi cấu hình
 

@@ -16,7 +16,7 @@ Hướng dẫn làm từng bước nằm ở [`docs/deployment.md`](../docs/depl
 | 2 | S3 + IAM — upload file lên AWS thật | ✅ Xong | [02-s3-va-iam.md](02-s3-va-iam.md) |
 | 3 | Deploy lên EC2 + PM2 + IAM Role | ✅ Xong | [03-ec2-va-iam-role.md](03-ec2-va-iam-role.md) |
 | 4 | Nginx reverse proxy | ✅ Xong | [04-nginx-reverse-proxy.md](04-nginx-reverse-proxy.md) |
-| 5 | Domain + HTTPS (Certbot) | ⬜ | |
+| 5 | Domain + HTTPS (Certbot) | ✅ Xong | [05-domain-https.md](05-domain-https.md) |
 | 6 | Chuyển sang RDS MySQL | ⬜ | |
 
 ## Mục lục
@@ -26,8 +26,9 @@ Hướng dẫn làm từng bước nằm ở [`docs/deployment.md`](../docs/depl
 3. [Giai đoạn 2 — S3 và IAM](02-s3-va-iam.md) — quyền trên AWS, luồng upload, bảo mật file
 4. [Giai đoạn 3 — EC2 và IAM Role](03-ec2-va-iam-role.md) — danh tính không cần mật khẩu, RAM, mạng, vận hành
 5. [Giai đoạn 4 — Nginx Reverse Proxy](04-nginx-reverse-proxy.md) — reverse proxy, keepalive, trust proxy, SSL termination
-6. [Nhật ký lỗi đã gặp](90-nhat-ky-loi.md) — lỗi thật, nguyên nhân thật, cách đọc lỗi
-7. [Cheatsheet](91-cheatsheet.md) — lệnh hay dùng, tra nhanh
+6. [Giai đoạn 5 — Domain + HTTPS](05-domain-https.md) — DNS, Certbot, auto-renew, CORS, HSTS
+7. [Nhật ký lỗi đã gặp](90-nhat-ky-loi.md) — lỗi thật, nguyên nhân thật, cách đọc lỗi
+8. [Cheatsheet](91-cheatsheet.md) — lệnh hay dùng, tra nhanh
 
 > Số 00–06 dành cho các giai đoạn, 90+ dành cho tài liệu tra cứu dùng chung.
 

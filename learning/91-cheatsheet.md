@@ -323,48 +323,87 @@ Ba điểm dễ sai:
 
 ---
 
-## Giai đoạn 4 — Nginx
+## Giai đoạn 5 — Domain + HTTPS (Certbot)
 
-### Cài đặt & quản lý
-
-```bash
-sudo apt-get update && sudo apt-get install -y nginx
-sudo nginx -t                     # kiểm tra cú pháp TRƯỚC khi reload
-sudo systemctl reload nginx       # reload không downtime
-sudo systemctl status nginx       # xem trạng thái service
-```
-
-### Log & Debug
+### DNS & Certbot
 
 ```bash
-tail -f /var/log/nginx/api.access.log   # access log
-tail -f /var/log/nginx/api.error.log    # error log
-sudo nginx -t                           # test config
-ss -tlnp | grep :80                     # port 80 đang listen?
+# Kiểm tra DNS
+dig +short api.yourdomain.com
+
+# Cài Certbot
+sudo apt-get update && sudo apt-get install -y certbot python3-certbot-nginx
+
+# Lấy certificate + auto-config Nginx (chọn Redirect = option 2)
+sudo certbot --nginx -d api.yourdomain.com
+
+# Test renew
+sudo certbot renew --dry-run
+
+# Xem cron renew
+cat /etc/cron.d/certbot
+# hoặc
+systemctl list-timers | grep certbot
 ```
 
-### Config quan trọng
+### Nginx SSL Config (Certbot tự tạo, có thể hardening thêm)
 
 ```nginx
-# deploy/nginx/api.conf
-client_max_body_size 6M;        # avatar 5MB + overhead
-proxy_http_version 1.1;         # keepalive upstream
-keepalive 32;                   # trong upstream block
-proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+# Trong block server { listen 443 ssl; }
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+ssl_prefer_server_ciphers off;
+
+# HSTS
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+# OCSP Stapling
+ssl_stapling on;
+ssl_stapling_verify on;
+resolver 8.8.8.8 8.8.4.4 valid=300s;
+resolver_timeout 5s;
 ```
 
-### Health check endpoints
+### CORS Config
 
 ```bash
-curl http://<ELASTIC_IP>/health          # liveness — process sống
-curl http://<ELASTIC_IP>/health/ready    # readiness — DB kết nối OK
+# Sửa .env trên EC2
+CORS_ORIGINS=https://yourdomain.com
+
+# Reload PM2 với env mới
+pm2 reload aws-deployment-api --update-env
+```
+
+### Test HTTPS & CORS
+
+```bash
+# HTTPS health
+curl -i https://api.yourdomain.com/health
+
+# Redirect HTTP → HTTPS
+curl -I http://api.yourdomain.com/health
+# Phải trả 301, Location: https://...
+
+# CORS preflight
+curl -i -X OPTIONS https://api.yourdomain.com/users \
+  -H "Origin: https://yourdomain.com" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: Content-Type"
+# Phải có: Access-Control-Allow-Origin: https://yourdomain.com
+#         Access-Control-Allow-Credentials: true
 ```
 
 ### Troubleshooting
 
-| Triệu chứng | Kiểm tra |
-|-------------|----------|
-| 502 Bad Gateway | `pm2 status`, `curl http://127.0.0.1:3000/health` |
-| 413 Request Entity Too Large | `client_max_body_size` trong config, reload nginx |
-| Trang Nginx mặc định | `ls /etc/nginx/sites-enabled/` — xoá `default` |
-| Không truy cập từ ngoài | SG inbound port 80 (0.0.0.0/0) |
+| Vấn đề | Kiểm tra |
+|--------|----------|
+| Certbot fail | `systemctl status nginx`, SG port 80/443 |
+| DNS không resolve | `dig api.yourdomain.com`, chờ propagate |
+| 502 HTTPS | `pm2 status`, `pm2 logs` |
+| Avatar URL http không phải https | Set `S3_PUBLIC_URL=https://<bucket>.s3.<region>.amazonaws.com` |
+| CORS error | `.env` CORS_ORIGINS đúng? `pm2 reload --update-env` làm chưa? |
+| Cert gần hết hạn | `certbot renew --dry-run`, check `/var/log/letsencrypt/letsencrypt.log` |
+
+---
+
+## Giai đoạn 6 — RDS MySQL (sắp tới)
