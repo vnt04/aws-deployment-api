@@ -26,23 +26,32 @@
           (Giai đoạn 6)        (Giai đoạn 2 ✅)
 ```
 
-Hiện tại (sau giai đoạn 5), phần đang chạy là:
+Hiện tại (sau giai đoạn 6), kiến trúc đích hoàn chỉnh:
 
 ```
-Internet ──▶ api.yourdomain.com (DNS)
-              │
-              ▼
-         Elastic IP
-              │
-              ▼
-         EC2: Nginx :80/:443 (SSL termination)  ← Giai đoạn 5 ✅
-              │       │
-              │       ▼ (proxy_pass)
-              │   NestJS :3000 (PM2)            ← Giai đoạn 3 ✅
-              └── MySQL :3306 (Docker)          ← Giai đoạn 6 sẽ chuyển sang RDS
+                        User
+                          │
+                          ▼
+                   api.yourdomain.com          ← Giai đoạn 5: DNS + HTTPS
+                          │
+                          ▼
+                     Elastic IP              ← Giai đoạn 3: IP tĩnh
+                          │
+              ┌───────────┴─────────┐
+              │        EC2          │
+              │   Nginx  :80/:443   │        ← Giai đoạn 4: reverse proxy + SSL termination
+              │         │           │
+              │   NestJS :3000      │        ← Giai đoạn 3: PM2 + IAM Role
+              │      (PM2)          │
+              └──────────┬──────────┘
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+          RDS MySQL                S3
+          (Giai đoạn 6)         (Giai đoạn 2 ✅)
 ```
 
-Tức là **code đã chạy trên EC2, traffic qua Nginx reverse proxy + HTTPS, upload lên S3 thật**. Giai đoạn 6 chỉ việc chuyển MySQL sang RDS.
+Tức là **toàn bộ stack đã production-ready**: Custom domain + HTTPS, Reverse proxy, Managed DB, Object storage, Process management, IAM Role-based auth.
 
 ## Luận điểm xuyên suốt: code không đổi, chỉ đổi cấu hình
 

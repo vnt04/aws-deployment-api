@@ -406,4 +406,84 @@ curl -i -X OPTIONS https://api.yourdomain.com/users \
 
 ---
 
-## Giai đoạn 6 — RDS MySQL (sắp tới)
+## Giai đoạn 6 — RDS MySQL
+
+### Tạo RDS (Console hoặc CLI)
+
+```bash
+# Cài mysql client trên EC2
+sudo apt-get update && sudo apt-get install -y mysql-client-core-8.0
+
+# Kết nối RDS (sau khi tạo xong, status Available)
+mysql -h <RDS_ENDPOINT> -u admin -p
+
+# Trong MySQL shell
+CREATE DATABASE aws_deployment CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'app'@'%' IDENTIFIED BY 'MatKhauAppManh456!';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES
+  ON aws_deployment.* TO 'app'@'%';
+FLUSH PRIVILEGES;
+```
+
+### Cập nhật .env trên EC2
+
+```bash
+cd /home/ubuntu/aws-deployment-api
+nano .env
+```
+
+```env
+DB_HOST=aws-deployment-db.xxxxxx.ap-southeast-2.rds.amazonaws.com
+DB_PORT=3306
+DB_USERNAME=app
+DB_PASSWORD=MatKhauAppManh456!
+DB_NAME=aws_deployment
+DB_SSL=true
+DB_SYNCHRONIZE=false
+DB_RUN_MIGRATIONS=true
+```
+
+### Chạy migration & reload
+
+```bash
+npm run migration:run
+pm2 reload aws-deployment-api --update-env
+```
+
+### Kiểm tra
+
+```bash
+curl https://api.yourdomain.com/health/ready  # phải 200
+curl https://api.yourdomain.com/health
+curl -X POST https://api.yourdomain.com/users/1/avatar -F 'avatar=@./avatar.jpg'
+```
+
+### Dọn MySQL Docker local (sau khi RDS ổn định)
+
+```bash
+docker compose down -v
+df -h
+```
+
+### SG RDS quan trọng
+
+| Rule | Giá trị |
+|------|---------|
+| Type | MySQL/Aurora |
+| Port | 3306 |
+| Source | **SG của EC2** (`launch-wizard-3`), **KHÔNG phải IP** |
+
+### Troubleshooting
+
+| Lỗi | Kiểm tra |
+|-----|----------|
+| ERROR 2003: Can't connect | SG RDS inbound source = SG EC2? |
+| ERROR 1045: Access denied | User `app`@`%` tồn tại? Password khớp `.env`? |
+| SSL connection error | `DB_SSL=true` + `ssl: { rejectUnauthorized: false }` |
+| Migration fail | Grant `CREATE, ALTER, DROP, INDEX` cho user `app` |
+| health/ready 503 | PM2 log, `.env` đúng? |
+| ER_NOT_SUPPORTED_AUTH_MODE | `CREATE USER ... IDENTIFIED WITH mysql_native_password` |
+
+---
+
+## Security Checklist (trước khi production)
