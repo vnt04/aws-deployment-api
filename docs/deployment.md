@@ -414,6 +414,7 @@ Script `git reset --hard origin/main` nhưng `.env`, `logs/`, `dist/` đều n�
 ## Giai đoạn 4 — Nginx reverse proxy
 
 ```bash
+sudo apt-get update
 sudo apt-get install -y nginx
 sudo cp deploy/nginx/api.conf /etc/nginx/sites-available/api.conf
 sudo ln -s /etc/nginx/sites-available/api.conf /etc/nginx/sites-enabled/api.conf
@@ -422,15 +423,33 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Sửa `server_name` trong file config thành domain thật của bạn.
+Sửa `server_name` trong file config thành domain thật của bạn (hoặc Elastic IP tạm thời).
 
 ### Kiểm tra
 
 ```bash
 curl http://<ELASTIC_IP>/health
+curl http://<ELASTIC_IP>/health/ready
+
+# Test upload avatar qua Nginx (max 5MB)
+curl -X POST http://<ELASTIC_IP>/users/1/avatar -F 'avatar=@./avatar.jpg'
 ```
 
----
+Đạt khi:
+1. `/health` trả `200` — Nginx forward đúng đến NestJS
+2. `/health/ready` trả `200` — DB connection OK
+3. Upload avatar trả về `avatarUrl` dạng `https://<bucket>.s3.ap-southeast-2.amazonaws.com/users/1/avatar.jpg`
+
+### Troubleshooting
+
+| Triệu chứng | Nguyên nhân | Khắc phục |
+|-------------|-------------|-----------|
+| `502 Bad Gateway` | NestJS (PM2) chưa chạy | `pm2 status`, `pm2 logs` |
+| `413 Request Entity Too Large` | `client_max_body_size` quá nhỏ | Kiểm tra `6M` trong config, reload nginx |
+| Không truy cập từ bên ngoài | SG chưa mở port 80 | Mở inbound port 80 (0.0.0.0/0) |
+| Trả về trang Nginx mặc định | Chưa disable default site | `sudo rm -f /etc/nginx/sites-enabled/default && sudo systemctl reload nginx` |
+
+> Chi tiết kiến thức: [`learning/04-nginx-reverse-proxy.md`](../learning/04-nginx-reverse-proxy.md)
 
 ## Giai đoạn 5 — Domain + HTTPS
 

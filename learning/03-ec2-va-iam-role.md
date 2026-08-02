@@ -6,11 +6,13 @@
 
 ```
 Internet ──▶ EC2 (Elastic IP)
-              ├── NestJS :3000  (PM2)          ──┐
-              └── MySQL  :3306  (Docker, loopback) │
-                                                   │ IAM Role
-                                                   ▼
-                                                  S3
+              ├── Nginx :80/:443   ← Giai đoạn 4
+              │       │
+              │       ▼
+              │   NestJS :3000  (PM2)
+              └── MySQL  :3306  (Docker, loopback)
+                      │
+                      └── IAM Role ──▶ S3
 ```
 
 Điểm khác biệt lớn nhất so với giai đoạn 2 nằm ở mũi tên cuối: không còn access key nào

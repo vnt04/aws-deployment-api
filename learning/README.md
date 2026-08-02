@@ -15,7 +15,7 @@ Hướng dẫn làm từng bước nằm ở [`docs/deployment.md`](../docs/depl
 | 1 | NestJS + MySQL (Docker) ở local | ✅ Xong | [01-nestjs-va-nen-mong.md](01-nestjs-va-nen-mong.md) |
 | 2 | S3 + IAM — upload file lên AWS thật | ✅ Xong | [02-s3-va-iam.md](02-s3-va-iam.md) |
 | 3 | Deploy lên EC2 + PM2 + IAM Role | ✅ Xong | [03-ec2-va-iam-role.md](03-ec2-va-iam-role.md) |
-| 4 | Nginx reverse proxy | ⬜ Tiếp theo | |
+| 4 | Nginx reverse proxy | ✅ Xong | [04-nginx-reverse-proxy.md](04-nginx-reverse-proxy.md) |
 | 5 | Domain + HTTPS (Certbot) | ⬜ | |
 | 6 | Chuyển sang RDS MySQL | ⬜ | |
 
@@ -24,9 +24,10 @@ Hướng dẫn làm từng bước nằm ở [`docs/deployment.md`](../docs/depl
 1. [Kiến trúc tổng quan](00-kien-truc-tong-quan.md) — bức tranh lớn và một luận điểm xuyên suốt
 2. [Giai đoạn 1 — NestJS và nền móng](01-nestjs-va-nen-mong.md) — kiến trúc tầng, config, envelope, migration
 3. [Giai đoạn 2 — S3 và IAM](02-s3-va-iam.md) — quyền trên AWS, luồng upload, bảo mật file
-4. [Giai đoạn 3 — EC2 và IAM Role](03-ec2-va-iam-role.md) — **trọng tâm hiện tại**: danh tính không cần mật khẩu, RAM, mạng, vận hành
-5. [Nhật ký lỗi đã gặp](90-nhat-ky-loi.md) — lỗi thật, nguyên nhân thật, cách đọc lỗi
-6. [Cheatsheet](91-cheatsheet.md) — lệnh hay dùng, tra nhanh
+4. [Giai đoạn 3 — EC2 và IAM Role](03-ec2-va-iam-role.md) — danh tính không cần mật khẩu, RAM, mạng, vận hành
+5. [Giai đoạn 4 — Nginx Reverse Proxy](04-nginx-reverse-proxy.md) — reverse proxy, keepalive, trust proxy, SSL termination
+6. [Nhật ký lỗi đã gặp](90-nhat-ky-loi.md) — lỗi thật, nguyên nhân thật, cách đọc lỗi
+7. [Cheatsheet](91-cheatsheet.md) — lệnh hay dùng, tra nhanh
 
 > Số 00–06 dành cho các giai đoạn, 90+ dành cho tài liệu tra cứu dùng chung.
 
@@ -60,3 +61,16 @@ Cách chống bền vững không phải giữ kín hơn, mà là rút ngắn th
 làm đúng điều đó: EC2 mượn danh tính qua STS, nhận credential hết hạn sau vài giờ và tự làm
 mới. Có cơ chế danh tính do nền tảng cấp thì đừng dùng secret tĩnh — GitHub Actions có OIDC,
 Kubernetes có ServiceAccount, cùng một ý tưởng.
+
+---
+
+## Điều thứ năm (sau giai đoạn 4)
+
+**5. Application server không nên lo infrastructure concerns.**
+NestJS xử lý business logic; Nginx lo TLS, compression, rate limit, buffering, logging.
+Tách biệt này cho phép:
+- Scale Nginx và NestJS độc lập
+- Swap Nginx bằng ALB/Traefik/Caddy không đổi code NestJS
+- Security patch ở layer infra không đụng business logic
+
+Đây là pattern **Reverse Proxy** — kiến trúc chuẩn cho mọi production web service.

@@ -26,15 +26,18 @@
           (Giai đoạn 6)        (Giai đoạn 2 ✅)
 ```
 
-Hiện tại (sau giai đoạn 2), phần đang chạy là:
+Hiện tại (sau giai đoạn 4), phần đang chạy là:
 
 ```
-Laptop (NestJS + Docker MySQL) ──▶ S3 thật trên AWS
+Internet ──▶ EC2 (Elastic IP)
+              ├── Nginx  :80         ← Giai đoạn 4 ✅
+              │       │
+              │       ▼
+              │   NestJS :3000       ← Giai đoạn 3 ✅
+              └── MySQL :3306 (Docker)
 ```
 
-Tức là **code vẫn ở local, nhưng file đã nằm trên AWS thật**. Đây là bước trung gian có
-chủ đích: học S3 và IAM trước, tách khỏi việc học EC2/SSH/Nginx. Nếu làm cả hai cùng lúc,
-khi lỗi sẽ không biết lỗi do quyền S3 hay do máy chủ.
+Tức là **code đã chạy trên EC2, traffic qua Nginx reverse proxy, upload lên S3 thật**. Giai đoạn 5 thêm DNS + HTTPS, giai đoạn 6 chuyển MySQL sang RDS.
 
 ## Luận điểm xuyên suốt: code không đổi, chỉ đổi cấu hình
 
