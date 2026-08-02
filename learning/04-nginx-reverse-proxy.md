@@ -107,26 +107,118 @@ Khi `trust proxy` được bật:
 
 ## 4. Security Group vs Application Layer — Defense in Depth
 
-| Layer | Chức năng | Cấu hình trong project |
-|-------|-----------|------------------------|
-| **Security Group (AWS)** | Chặn traffic ở network level | Port 3000, 3306 **không bao giờ mở ra internet** |
-| **Nginx** | Chặn ở application level | Rate limit, block bad UA, WAF rules, SSL termination |
+### So sánh chi tiết
+
+| Đặc điểm | **Security Group (AWS)** | **Nginx (Application Layer)** |
+|----------|--------------------------|-------------------------------|
+| **Vị trí trong stack** | Network layer (L3/L4) — trước khi packet đến EC2 | Application layer (L7) — sau khi TCP handshake xong |
+| **Đơn vị lọc** | IP nguồn, port, protocol (TCP/UDP) | HTTP method, path, header, body, IP, User-Agent |
+| **Stateful** | ✅ Tự động allow response traffic | ❌ Stateless (mỗi request độc lập) |
+| **Có thấy HTTP không** | ❌ Chỉ thấy IP:port | ✅ Xem được toàn bộ HTTP request/response |
+| **Rate limit** | ❌ Không có | ✅ `limit_req_zone`, `limit_conn_zone` |
+| **SSL/TLS** | ❌ Không terminate được | ✅ Terminate SSL, chọn cipher, HSTS |
+| **Logging** | VPC Flow Logs (IP, port, bytes) | Access log chi tiết (method, path, status, latency, UA) |
+| **WAF** | ❌ Không | ✅ Có thể gắn ModSecurity, custom rules |
+| **Thay đổi config** | Cần AWS Console/CLI, có delay ~seconds | `nginx -t && systemctl reload nginx` — tức thì |
+| **Phạm vi bảo vệ** | Toàn bộ instance (mọi app trên máy) | Chỉ app được config (virtual host) |
+
+### Ví dụ cụ thể trong project
+
+| Tấn công | Security Group chặn được? | Nginx chặn được? |
+|----------|---------------------------|------------------|
+| Port scan tìm port 3000/3306 | ✅ **Chặn** — SG không mở port này | ❌ Không nhận được packet |
+| DDoS SYN flood | ✅ AWS Shield Standard tự động giảm thiểu | ❌ Không nhận được packet |
+| HTTP flood (1000 req/s `/users`) | ❌ Packet hợp lệ (port 80) | ✅ `limit_req_zone` giới hạn 100 req/phút |
+| SQL injection trong query param | ❌ Không hiểu SQL | ✅ ModSecurity rule chặn `union select` |
+| Upload file 50MB | ❌ Packet hợp lệ | ✅ `client_max_body_size 6M` → 413 |
+| Bad bot (User-Agent: `sqlmap`) | ❌ Không thấy UA | ✅ `if ($http_user_agent ~* sqlmap) { return 403; }` |
+| Yêu cầu HTTPS only | ❌ Không terminate SSL | ✅ Redirect 301 HTTP→HTTPS, HSTS header |
+| CORS preflight sai domain | ❌ Không hiểu CORS | ✅ Trả `Access-Control-Allow-Origin` đúng |
+
+### Kiến trúc Defense in Depth trong project
 
 ```
 Internet
     │
     ▼
-┌─────────────────────────────────────┐
-│ Security Group: chỉ mở 22, 80, 443  │  ← Lớp 1: Network firewall
-└─────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│ LAYER 1: Security Group (AWS Network Firewall)              │
+│ - Chỉ mở: 22 (SSH, My IP), 80 (HTTP), 443 (HTTPS)          │
+│ - ĐÓNG: 3000 (Node.js), 3306 (MySQL), mọi port khác         │
+│ - Stateful: response traffic tự allow                       │
+└─────────────────────────────────────────────────────────────┘
     │
     ▼
-┌─────────────────────────────────────┐
-│ Nginx: rate limit, SSL, gzip,       │  ← Lớp 2: Application firewall
-│ client_max_body_size, access log    │
-└─────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│ LAYER 2: Nginx (Application Firewall / Reverse Proxy)       │
+│ - SSL termination: listen 443, certbot auto-renew           │
+│ - Rate limit: limit_req_zone $binary_remote_addr zone=api:10m rate=100r/m │
+│ - Body size: client_max_body_size 6M                        │
+│ - Security headers: X-Frame-Options, X-Content-Type-Options │
+│ - Access log: /var/log/nginx/api.access.log (JSON format)   │
+│ - Error log: /var/log/nginx/api.error.log                   │
+│ - Block bad UA: sqlmap, nikto, nessus, ...                  │
+│ - Health check: /health (liveness), /health/ready (ready)   │
+└─────────────────────────────────────────────────────────────┘
     │
     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ LAYER 3: NestJS Application (Business Logic Security)       │
+│ - Helmet(): security headers (CSP, HSTS, XSS protection)    │
+│ - CORS: CORS_ORIGINS=https://yourdomain.com (không phải *)  │
+│ - ValidationPipe: whitelist, forbidNonWhitelisted, transform│
+│ - ThrottlerGuard: rate limit 100 req/phút (backup nếu Nginx fail) │
+│ - FileInterceptor: limit 5MB, magic bytes check (JPEG/PNG/WEBP) │
+│ - Sanitize filename: chỉ dùng UUID + extension hợp lệ       │
+│ - IAM Role: không access key trên đĩa, credential tự rotate │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Tại sao cần cả hai? (Tư duy Swiss Cheese Model)
+
+Mỗi layer có "lỗ hổng" riêng (như miếng phô mai Swiss). Chồng nhiều layer lên nhau → lỗ hổng không còn thẳng hàng → tấn công khó xuyên thủng.
+
+| Layer | Lỗ hổng (nếu chỉ có layer này) | Layer khác khắc phục |
+|-------|-------------------------------|---------------------|
+| Chỉ SG | Cho phép mọi traffic HTTP hợp lệ → DDoS, injection, bad bot | Nginx rate limit, WAF, body size |
+| Chỉ Nginx | Port 3000/3306 mở ra internet → attacker bypass Nginx, truy cập thẳng Node/MySQL | SG đóng port |
+| Chỉ NestJS | Process crash → không có ai chặn request → 502, resource exhaustion | Nginx buffer, timeout, upstream check |
+
+### Best Practice trong project
+
+1. **SG là hàng rào đầu tiên** — mở tối thiểu port (22, 80, 443). Không bao giờ mở 3000, 3306.
+2. **Nginx là hàng rào thứ hai** — xử lý mọi thứ liên quan HTTP: SSL, rate limit, body size, logging, bad bot.
+3. **NestJS là hàng rào cuối** — business logic validation, authentication, authorization, data sanitization.
+4. **Không tin tưởng lẫn nhau** — NestJS vẫn validate input dù Nginx đã lọc; Nginx vẫn rate limit dù ThrottlerGuard có sẵn.
+
+### Config Nginx bổ sung cho security (có thể thêm vào `api.conf`)
+
+```nginx
+# Rate limit zone (đặt trong http block, ngoài server block)
+# limit_req_zone $binary_remote_addr zone=api:10m rate=100r/m;
+
+server {
+    # ... config hiện có ...
+
+    # Áp dụng rate limit cho tất cả endpoint
+    # limit_req zone=api burst=20 nodelay;
+
+    # Block bad User-Agent
+    if ($http_user_agent ~* (sqlmap|nikto|nessus|nmap|masscan|zmap)) {
+        return 403;
+    }
+
+    # Security headers (bổ sung cho Helmet của NestJS)
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    
+    # Hide Nginx version
+    server_tokens off;
+}
+```
+
+**Lesson**: *Defense in depth = không layer nào là đủ. SG chặn "ai được đến", Nginx chặn "cái gì được qua", NestJS chặn "logic có đúng không".*
 ┌─────────────────────────────────────┐
 │ NestJS: helmet(), CORS, validation, │  ← Lớp 3: Application logic
 │ throttler, business logic           │
